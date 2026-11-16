@@ -49,7 +49,7 @@ func TestServeFlagGroups(t *testing.T) {
 			t.Errorf("--%s must appear only in Server Flags", flag)
 		}
 	}
-	for _, flag := range []string{"model", "nctx", "ngl", "compute", "vit-compute", "power-mode", "spec-type", "draft-model", "draft-tokens", "draft-min", "draft-p-min", "think"} {
+	for _, flag := range []string{"model", "nctx", "ngl", "nbatch", "nubatch", "compute", "vit-compute", "power-mode", "spec-type", "draft-model", "draft-tokens", "draft-min", "draft-p-min", "think"} {
 		if !strings.Contains(defaultFlags, "--"+flag) || strings.Contains(serverFlags, "--"+flag) {
 			t.Errorf("--%s must appear only in Model Default Flags", flag)
 		}
@@ -199,5 +199,33 @@ func TestServeSpeculativeDecodingEnvironmentBindings(t *testing.T) {
 	cfg := config.Get()
 	if cfg.SpecType != "draft-mtp" || cfg.DraftModel != "draft.gguf" || cfg.DraftTokens != 7 || cfg.DraftMin != 2 || cfg.DraftPMin != 0.65 {
 		t.Errorf("serve MTP environment defaults = %+v, want type=draft-mtp, model=draft.gguf, tokens=7, min=2, p_min=0.65", cfg)
+	}
+}
+
+// TestServeBatchFlags verifies --nbatch / --nubatch reach the config, that the
+// environment binds them, and that a flag overrides the environment.
+func TestServeBatchFlags(t *testing.T) {
+	resetServeTestViper(t)
+	t.Setenv("GENIEX_NBATCH", "1024")
+	t.Setenv("GENIEX_NUBATCH", "256")
+	cmd := serve()
+	if cfg := config.Get(); cfg.NBatch != 1024 || cfg.NUbatch != 256 {
+		t.Errorf("environment batch defaults = nbatch %d, nubatch %d, want 1024, 256", cfg.NBatch, cfg.NUbatch)
+	}
+	if err := cmd.Flags().Set("nubatch", "128"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := config.Get(); cfg.NBatch != 1024 || cfg.NUbatch != 128 {
+		t.Errorf("--nubatch should override GENIEX_NUBATCH: nbatch %d, nubatch %d, want 1024, 128", cfg.NBatch, cfg.NUbatch)
+	}
+}
+
+// TestServeBatchFlagsDefaultToPlugin verifies both batch sizes default to 0, so
+// the plugin keeps choosing them when neither flag nor environment is set.
+func TestServeBatchFlagsDefaultToPlugin(t *testing.T) {
+	resetServeTestViper(t)
+	serve()
+	if cfg := config.Get(); cfg.NBatch != 0 || cfg.NUbatch != 0 {
+		t.Errorf("unset batch sizes = nbatch %d, nubatch %d, want 0, 0", cfg.NBatch, cfg.NUbatch)
 	}
 }

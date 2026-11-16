@@ -157,6 +157,43 @@ In Swagger UI, replace the request body with a VLM payload like the one above, p
 
 ![Response body showing a successful 200 response with the VLM's image description](/Images/server/curl-5.png)
 
+## **POST /v1/responses**
+
+The [Open Responses](https://www.openresponses.org/specification) create endpoint (spec version 2026-04-24). It runs the same model, chat template, tool parsing and image handling as `/v1/chat/completions`; only the request and response shapes differ. `input` is a string (one user message) or a list of items: `message` (roles `user`, `system`, `developer`, `assistant`; `input_text` and `input_image` parts), `function_call`, `function_call_output`, `item_reference`, and `reasoning` (accepted, not replayed).
+
+```bash
+curl http://127.0.0.1:18181/v1/responses -H "Content-Type: application/json" -d '{
+  "model": "google/gemma-4-E4B-it-qat-q4_0-gguf:Q4_0",
+  "instructions": "Answer briefly.",
+  "input": "What is 17 * 23?",
+  "reasoning": {"effort": "high"},
+  "max_output_tokens": 512
+}'
+```
+
+The response is a `response` object whose `output` holds a `reasoning` item (the model's thinking, as `reasoning_text`) when the model thinks, then a `message` item with `output_text`, or `function_call` items when it calls a tool. `status` is `completed`, or `incomplete` with `incomplete_details.reason` `max_output_tokens` when generation stopped at the limit. `usage` reports `input_tokens`, `output_tokens`, cached input tokens and reasoning tokens; `timings` adds the prefill and decode speeds as on chat.
+
+- **Streaming:** with `"stream": true` the server sends the spec's events: `response.created`, `response.in_progress`, then per item `response.output_item.added`, `response.content_part.added`, `response.output_text.delta` (or `response.reasoning.delta`), the matching `.done` events and `response.output_item.done`, and for a tool call `response.function_call_arguments.delta` and `.done`. The stream ends with `response.completed`, `response.incomplete`, or `error` followed by `response.failed`. Each event has a `sequence_number`; no `[DONE]` line follows.
+- **Conversation state:** responses are kept in memory (the latest 256) unless `"store": false`. `previous_response_id` continues from a stored response, and `item_reference` reuses a stored item. A restart forgets them; an unknown id is a 400 with code `previous_response_not_found`. A `function_call_output` must answer a `function_call` earlier in the conversation.
+- **Tools:** `function` tools only. `tool_choice` `none` offers no tools, a named function or `allowed_tools` offers only those and drops any other call, and `required` is treated as `auto`. `max_tool_calls` caps the calls kept.
+- **Thinking:** `reasoning.effort` `none` turns thinking off and any other effort turns it on; omitted, the server's `--think` default applies. `reasoning.summary` is not produced.
+- **Not supported:** `text.format` other than `text` (there is no JSON-schema constrained output yet), `background`, and `input_file` parts. These return a 400 with code `unsupported_parameter`.
+- **Extensions:** `nctx`, `ngl`, `compute`, `power_mode`, `seed`, `top_k` and `min_p` work as on `/v1/chat/completions`.
+
+Errors use the spec's shape: `{"error": {"type": "invalid_request", "code": "...", "message": "...", "param": "..."}}`.
+
+### **WebSocket (ws://.../v1/responses)**
+
+Open a WebSocket on the same resource and send one `{"type": "response.create", ...}` message per turn, with the same fields as a POST except `stream`, `stream_options` and `background` (those are rejected). The server answers each turn with the streaming events above, one JSON text message per event, ending at `response.completed` or `response.incomplete`. Turns on one connection run one at a time; other HTTP requests are served between turns.
+
+- **Continuation:** the connection keeps its 16 most recent responses, including `store: false` ones, so a follow-up turn can send `previous_response_id` and only the new items. A `store: false` response is gone once the connection closes. A turn that fails while continuing a response evicts that response from the connection.
+- **Errors:** a failed turn is a single envelope `{"type": "error", "status": 400, "error": {"code": "...", "message": "...", "param": "..."}}`, with no `response.failed` after it.
+- **Limits:** a connection lasts at most 60 minutes, then gets the code `websocket_connection_limit_reached`; a message may be up to 64 MiB (inline images). Origins follow `serve --origins`.
+
+### **POST /v1/responses/compact**
+
+Compacts a conversation into a window that replaces it as the input of a new chain. It takes `model` (required), `input`, `previous_response_id` and `instructions`, has the model summarize the conversation (thinking off, at most 1024 tokens), and returns `{"object": "response.compaction", "output": [{"type": "compaction", ...}], "usage": ...}`. Start the next response without `previous_response_id`, with that `output` as the first input items, then the new user or tool items. The compaction item's `encrypted_content` is the summary, base64-encoded; it is opaque to clients by the spec, and GenieX does not encrypt it.
+
 ## **POST /v1/completions**
 
 Generates a raw continuation of `prompt` with no chat template applied — the prompt reaches the model verbatim. Use this for clients that build the full prompt themselves, such as editor fill-in-the-middle (FIM) code autocompletion: put the model's FIM tokens directly in `prompt`. LLM models only.

@@ -159,6 +159,8 @@ geniex serve
 
 chat 请求默认启用思考。使用 `--think=false`（或 `GENIEX_THINK=false`）启动服务器，可让未携带 `enable_think` 的请求默认关闭思考；请求中的该字段始终优先。
 
+`--nbatch` 和 `--nubatch`（或 `GENIEX_NBATCH` / `GENIEX_NUBATCH`）为服务器加载的每个模型设置 llama_cpp 批大小；`0` 保留插件默认值。请求中没有对应字段。调小 `--nubatch` 会缩小计算缓冲区，可让超出 NPU 映射空间的模型得以加载，但提示词处理会变慢。Liquid d1 决策模型在一个物理批内评估每个 `/v1/decisions` 问题，因此使用这类模型时，超过 `--nubatch` 个 token 的问题会被拒绝；其他模型会像普通提示词一样分批处理。
+
 ## **日志**
 
 `--log` 是全局标志，控制 CLI 的日志输出。它与 `GENIEX_LOG` 环境变量等效，且当二者同时设置时优先于 `GENIEX_LOG`。
@@ -205,6 +207,8 @@ geniex --log debug list
 |---|---|---|---|
 | `-n`, `--ngl` | int | `-1` | 卸载到 GPU/NPU 的层数，`-1` = 全部（仅 llama_cpp）。 |
 | `--nctx` | int | `4096` | 上下文窗口大小（最大输入 + 输出 token 数）。 |
+| `--nbatch` | int | `0` | 逻辑批大小；`0` = 插件默认值（`2048`）（仅 llama_cpp）。 |
+| `--nubatch` | int | `0` | 物理批大小；`0` = 按平台和计算单元取插件默认值（仅 llama_cpp）。计算缓冲区随之增大：NPU 加载报 `fastrpc_mmap failed` 时可调小。 |
 | `--max-tokens` | int | `2048` | 每次响应生成的最大 token 数。 |
 | `--stop` | string[] | — | 停止序列（可多次指定）。 |
 | `--stop-file` | string | — | 包含停止序列的文件（每行一个）。 |

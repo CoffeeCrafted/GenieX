@@ -77,6 +77,39 @@ func TestResolveModelParam_NonLlamaCppZeroesNCtx(t *testing.T) {
 	}
 }
 
+// TestResolveModelParam_CarriesServerBatchSizes verifies the server-wide batch
+// sizes reach the ModelParam for llama_cpp, so the keep-alive cache reloads a
+// model when they change.
+func TestResolveModelParam_CarriesServerBatchSizes(t *testing.T) {
+	viper.Set("nbatch", 512)
+	viper.Set("nubatch", 128)
+	defer viper.Set("nbatch", nil)
+	defer viper.Set("nubatch", nil)
+	got, err := ResolveModelParam(geniex_sdk.RuntimeLlamaCpp, "some-model", 4096, -1, "cpu", "", "", "", types.SpecParam{})
+	if err != nil {
+		t.Fatalf("ResolveModelParam: %v", err)
+	}
+	if got.NBatch != 512 || got.NUbatch != 128 {
+		t.Errorf("NBatch, NUbatch = %d, %d, want 512, 128", got.NBatch, got.NUbatch)
+	}
+}
+
+// TestResolveModelParam_NonLlamaCppZeroesBatchSizes verifies the batch sizes
+// stay zero for other runtimes, which do not take them.
+func TestResolveModelParam_NonLlamaCppZeroesBatchSizes(t *testing.T) {
+	viper.Set("nbatch", 512)
+	viper.Set("nubatch", 128)
+	defer viper.Set("nbatch", nil)
+	defer viper.Set("nubatch", nil)
+	got, err := ResolveModelParam(geniex_sdk.RuntimeQairt, "some-model", 0, 0, "", "", "", "", types.SpecParam{})
+	if err != nil {
+		t.Fatalf("ResolveModelParam: %v", err)
+	}
+	if got.NBatch != 0 || got.NUbatch != 0 {
+		t.Errorf("NBatch, NUbatch = %d, %d, want 0, 0 for non-llama_cpp", got.NBatch, got.NUbatch)
+	}
+}
+
 // TestResolveModelParam_PowerModeResolves verifies a power_mode alias is
 // resolved to the geniex_PowerMode the SDK expects.
 func TestResolveModelParam_PowerModeResolves(t *testing.T) {

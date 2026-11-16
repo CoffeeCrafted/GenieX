@@ -49,6 +49,97 @@ paths:
               schema:
                 $ref: "#/components/schemas/CompletionResponse"
 
+  /v1/responses:
+    post:
+      summary: Creates a model response (Open Responses)
+      description: |
+        The Open Responses create endpoint (https://www.openresponses.org/specification,
+        version 2026-04-24). Runs the same model, chat template, tool parsing and
+        image handling as /v1/chat/completions. With `stream: true` the response is
+        the spec's server-sent events (response.created ... response.completed).
+        The same resource also accepts a WebSocket upgrade (GET), one turn per
+        {"type":"response.create"} message. Not supported: text.format other than
+        text, background and input_file parts.
+      operationId: PostV1Responses
+      externalDocs:
+        url: https://www.openresponses.org/reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
+      responses:
+        "200":
+          description: The response object (non-streaming), or text/event-stream events when streaming
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseObject"
+        "400":
+          description: Invalid or unsupported request, or previous_response_id not found (code previous_response_not_found), in the spec's error shape
+
+  /v1/responses/compact:
+    post:
+      summary: Compacts a conversation into a window for a new chain (Open Responses)
+      description: |
+        Has the model summarize the conversation (input, previous_response_id and
+        instructions resolved as for /v1/responses) and returns one compaction item.
+        Pass the output as the first input items of a new response, without
+        previous_response_id. encrypted_content is the summary, base64-encoded; it
+        is not encrypted.
+      operationId: PostV1ResponsesCompact
+      externalDocs:
+        url: https://www.openresponses.org/reference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+                  example: google/gemma-4-E4B-it-qat-q4_0-gguf:Q4_0
+                input:
+                  description: A string or a list of items, as for /v1/responses
+                previous_response_id:
+                  type: string
+                instructions:
+                  type: string
+      responses:
+        "200":
+          description: The compacted window
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  object:
+                    type: string
+                    enum: [response.compaction]
+                  output:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                          enum: [compaction]
+                        id:
+                          type: string
+                        encrypted_content:
+                          type: string
+                  created_at:
+                    type: integer
+                  usage:
+                    type: object
+        "400":
+          description: Missing model, or an invalid request, in the spec's error shape
+
   /v1/logits:
     post:
       summary: Raw logits from a single prefill-only forward pass
@@ -597,6 +688,86 @@ components:
                 description: top_n > 0 — top logits sorted descending; top_n == 0 — full vocab in token-id order.
 
     # ---------- Completions ----------
+    ResponsesRequest:
+      type: object
+      description: CreateResponseBody of the Open Responses spec; every field is optional. GenieX also takes nctx, ngl, compute, power_mode, seed, top_k and min_p as on chat.
+      properties:
+        model:
+          type: string
+          example: google/gemma-4-E4B-it-qat-q4_0-gguf:Q4_0
+        input:
+          description: A string (one user message) or a list of items (message, function_call, function_call_output, item_reference, reasoning)
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+          example: What is 17 * 23?
+        instructions:
+          type: string
+        previous_response_id:
+          type: string
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [function]
+              name:
+                type: string
+              description:
+                type: string
+              parameters:
+                type: object
+        tool_choice:
+          description: none, auto, required, {"type":"function","name":...} or {"type":"allowed_tools",...}
+        reasoning:
+          type: object
+          properties:
+            effort:
+              type: string
+              enum: [none, low, medium, high, xhigh]
+        max_output_tokens:
+          type: integer
+        max_tool_calls:
+          type: integer
+        temperature:
+          type: number
+        top_p:
+          type: number
+        stream:
+          type: boolean
+        store:
+          type: boolean
+          default: true
+    ResponseObject:
+      type: object
+      description: ResponseResource of the Open Responses spec, plus GenieX timings
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [response]
+        status:
+          type: string
+          enum: [completed, incomplete, failed, in_progress]
+        output:
+          type: array
+          description: reasoning, message and function_call items
+          items:
+            type: object
+        usage:
+          type: object
+          properties:
+            input_tokens:
+              type: integer
+            output_tokens:
+              type: integer
+            total_tokens:
+              type: integer
     CompletionRequest:
       type: object
       required: [prompt]

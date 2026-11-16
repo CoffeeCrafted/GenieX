@@ -121,7 +121,7 @@ func decide() *cobra.Command {
 				ModelPath: paths.ModelPath, MmprojPath: paths.MmprojPath,
 				RuntimeID: paths.RuntimeID, DeviceID: deviceID, VitDeviceID: vitComputeUnit,
 				Config: geniex_sdk.ModelConfig{
-					NCtx: resolvedNCtx, NUbatch: ubatch, NGpuLayers: resolvedNgl, PowerMode: resolvedPower,
+					NCtx: resolvedNCtx, NBatch: nbatch, NUbatch: ubatch, NGpuLayers: resolvedNgl, PowerMode: resolvedPower,
 				},
 			})
 			if err != nil {
@@ -153,7 +153,7 @@ func decide() *cobra.Command {
 		model, err := geniex_sdk.NewLLM(geniex_sdk.LlmCreateInput{
 			ModelPath: paths.ModelPath, RuntimeID: paths.RuntimeID, DeviceID: deviceID,
 			Config: geniex_sdk.ModelConfig{
-				NCtx: resolvedNCtx, NUbatch: ubatch, NGpuLayers: resolvedNgl, PowerMode: resolvedPower,
+				NCtx: resolvedNCtx, NBatch: nbatch, NUbatch: ubatch, NGpuLayers: resolvedNgl, PowerMode: resolvedPower,
 			},
 		})
 		if err != nil {

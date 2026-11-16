@@ -114,6 +114,43 @@ curl http://127.0.0.1:18181/v1/chat/completions \
 
 ![响应体展示 200 成功响应及 VLM 对图像的描述](/Images/server/curl-5.png)
 
+## **POST /v1/responses**
+
+[Open Responses](https://www.openresponses.org/specification) 的创建端点（规范版本 2026-04-24）。它与 `/v1/chat/completions` 使用相同的模型、聊天模板、工具调用解析和图像处理，只是请求和响应的格式不同。`input` 可以是字符串（一条用户消息），也可以是条目列表：`message`（角色 `user`、`system`、`developer`、`assistant`；内容部件 `input_text` 和 `input_image`）、`function_call`、`function_call_output`、`item_reference`，以及 `reasoning`（接受，但不会回放）。
+
+```bash
+curl http://127.0.0.1:18181/v1/responses -H "Content-Type: application/json" -d '{
+  "model": "google/gemma-4-E4B-it-qat-q4_0-gguf:Q4_0",
+  "instructions": "Answer briefly.",
+  "input": "What is 17 * 23?",
+  "reasoning": {"effort": "high"},
+  "max_output_tokens": 512
+}'
+```
+
+响应是一个 `response` 对象：模型思考时，`output` 先包含一个 `reasoning` 条目（以 `reasoning_text` 给出思考内容），然后是带 `output_text` 的 `message` 条目；调用工具时则是 `function_call` 条目。`status` 为 `completed`；若生成在上限处停止，则为 `incomplete`，且 `incomplete_details.reason` 为 `max_output_tokens`。`usage` 给出 `input_tokens`、`output_tokens`、缓存的输入 token 数和推理 token 数；`timings` 与 chat 一样补充预填充和解码速度。
+
+- **流式：** 设置 `"stream": true` 时，服务器按规范发送事件：`response.created`、`response.in_progress`，然后每个条目依次为 `response.output_item.added`、`response.content_part.added`、`response.output_text.delta`（或 `response.reasoning.delta`）、对应的 `.done` 事件和 `response.output_item.done`；工具调用为 `response.function_call_arguments.delta` 和 `.done`。流以 `response.completed`、`response.incomplete`，或 `error` 加 `response.failed` 结束。每个事件带有 `sequence_number`；结尾不发送 `[DONE]`。
+- **会话状态：** 除非设置 `"store": false`，响应保存在内存中（最近 256 个）。`previous_response_id` 从已保存的响应继续，`item_reference` 复用已保存的条目。服务器重启后会全部丢失；未知的 id 返回 400，代码为 `previous_response_not_found`。`function_call_output` 必须对应会话中更早出现的 `function_call`。
+- **工具：** 仅支持 `function` 工具。`tool_choice` 为 `none` 时不提供工具；指定函数或 `allowed_tools` 时只提供这些工具，并丢弃对其他函数的调用；`required` 按 `auto` 处理。`max_tool_calls` 限制保留的调用数。
+- **思考：** `reasoning.effort` 为 `none` 时关闭思考，其他取值开启思考；省略时使用服务器的 `--think` 默认值。不生成 `reasoning.summary`。
+- **不支持：** `text` 以外的 `text.format`（尚无 JSON schema 约束输出）、`background` 以及 `input_file` 部件。这些会返回 400，代码为 `unsupported_parameter`。
+- **扩展字段：** `nctx`、`ngl`、`compute`、`power_mode`、`seed`、`top_k` 和 `min_p` 与 `/v1/chat/completions` 中的用法相同。
+
+错误采用规范的格式：`{"error": {"type": "invalid_request", "code": "...", "message": "...", "param": "..."}}`。
+
+### **WebSocket（ws://.../v1/responses）**
+
+在同一资源上打开 WebSocket，每一轮发送一条 `{"type": "response.create", ...}` 消息，字段与 POST 相同，但不能包含 `stream`、`stream_options` 和 `background`（会被拒绝）。服务器以上述流式事件应答每一轮，每个事件一条 JSON 文本消息，以 `response.completed` 或 `response.incomplete` 结束。同一连接上的轮次依次执行；轮次之间会处理其他 HTTP 请求。
+
+- **续接：** 连接保留最近的 16 个响应（包括 `store: false` 的响应），因此后续轮次可以只发送 `previous_response_id` 和新的条目。连接关闭后，`store: false` 的响应即失效。续接某个响应的轮次失败时，该响应会从连接中移除。
+- **错误：** 失败的轮次只发送一个信封 `{"type": "error", "status": 400, "error": {"code": "...", "message": "...", "param": "..."}}`，其后不再发送 `response.failed`。
+- **限制：** 每个连接最长 60 分钟，之后返回代码 `websocket_connection_limit_reached`；单条消息最大 64 MiB（用于内联图片）。允许的来源遵循 `serve --origins`。
+
+### **POST /v1/responses/compact**
+
+把会话压缩成一个窗口，作为新会话链的输入来替代原会话。它接受 `model`（必填）、`input`、`previous_response_id` 和 `instructions`，让模型总结会话（关闭思考，最多 1024 个 token），返回 `{"object": "response.compaction", "output": [{"type": "compaction", ...}], "usage": ...}`。开始下一个响应时不要带 `previous_response_id`，把该 `output` 作为最前面的输入条目，再加上新的用户或工具条目。compaction 条目的 `encrypted_content` 是经 base64 编码的摘要；按规范它对客户端不透明，GenieX 并未对其加密。
+
 ## **POST /v1/completions**
 
 对 `prompt` 生成原始续写，不套用聊天模板 —— 提示词会原样传给模型。适用于自行构造完整提示词的客户端，例如编辑器的 fill-in-the-middle（FIM）代码补全：把模型的 FIM 标记直接写进 `prompt`。仅支持 LLM 模型。

@@ -19,6 +19,13 @@ var GILock sync.Mutex
 var pendingRelease func()
 
 func GIL(c *gin.Context) {
+	WithGIL(c.Next)
+}
+
+// WithGIL runs f holding the GIL, as one request. A WebSocket connection is
+// long-lived and is not wrapped in GIL; it takes the GIL once per turn
+// instead, so other requests run between its turns.
+func WithGIL(f func()) {
 	// Block rather than fail so briefly queued requests don't 429.
 	GILock.Lock()
 	pendingRelease = nil
@@ -29,7 +36,7 @@ func GIL(c *gin.Context) {
 		GILock.Unlock()
 	}()
 
-	c.Next()
+	f()
 }
 
 // RunOnRelease schedules f to run when the current request releases the GIL.
