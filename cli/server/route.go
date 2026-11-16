@@ -31,6 +31,11 @@ func RegisterSwagger(r *gin.Engine) {
 }
 
 func RegisterAPIv1(r *gin.Engine) {
+	// The Open Responses WebSocket transport, on the same resource as POST
+	// /v1/responses. Not in the group below: a connection is long-lived and
+	// takes the GIL per turn itself (handler.ResponsesWebSocket).
+	r.GET("/v1/responses", handler.ResponsesWebSocket)
+
 	g := r.Group("/v1")
 	g.GET("/", func(c *gin.Context) {
 		c.String(200, "GenieX-CLI is running")
@@ -41,6 +46,10 @@ func RegisterAPIv1(r *gin.Engine) {
 	// ==== openai compatible ====
 	g.POST("/completions", handler.Completions)
 	g.POST("/chat/completions", handler.ChatCompletions)
+
+	// ==== open responses (https://www.openresponses.org) ====
+	g.POST("/responses", handler.Responses)
+	g.POST("/responses/compact", handler.ResponsesCompact)
 
 	// ==== raw logits (prefill-only forward pass; not OpenAI generative logprobs) ====
 	g.POST("/logits", handler.ForwardLogits)

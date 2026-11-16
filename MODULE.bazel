@@ -75,6 +75,7 @@ use_repo(
     "com_github_bytedance_sonic",
     "com_github_charmbracelet_huh",
     "com_github_charmbracelet_huh_spinner",
+    "com_github_coder_websocket",
     "com_github_dustin_go_humanize",
     "com_github_gin_gonic_gin",
     "com_github_gookit_color",

@@ -67,7 +67,7 @@ func buildToolCalls(c *gin.Context, msg openai.ChatCompletionMessageParamUnion) 
 				kind = *t
 			}
 			slog.Error("Not support tool call type", "type", kind)
-			c.JSON(http.StatusBadRequest, map[string]any{"error": "not support tool call type"})
+			writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "not support tool call type"})
 			return nil, false
 		}
 		call := geniex_sdk.ToolCall{Name: fn.Name, Arguments: fn.Arguments}
@@ -129,7 +129,7 @@ func buildLLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					})
 				default:
 					slog.Error("Not support content part type", "type", *ct.GetType())
-					c.JSON(http.StatusBadRequest, map[string]any{"error": "not support content part type"})
+					writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "not support content part type"})
 					return nil, false
 				}
 			}
@@ -143,14 +143,14 @@ func buildLLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					})
 				default:
 					slog.Error("Not support content part type", "type", *ct.GetType())
-					c.JSON(http.StatusBadRequest, map[string]any{"error": "not support content part type"})
+					writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "not support content part type"})
 					return nil, false
 				}
 			}
 
 		default:
 			slog.Error("Unknown content type in message", "content_type", fmt.Sprintf("%T", content))
-			c.JSON(http.StatusBadRequest, map[string]any{"error": "unknown content type"})
+			writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "unknown content type"})
 			return nil, false
 		}
 	}
@@ -227,7 +227,7 @@ func buildVLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					file, err := utils.SaveURIToTempFile(ct.GetImageURL().URL)
 					slog.Debug("Saved image file", "file", file)
 					if err != nil {
-						c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+						writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
 						return nil, tempFiles, false
 					}
 					tempFiles = append(tempFiles, file)
@@ -244,7 +244,7 @@ func buildVLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					file, err := utils.SaveURIToTempFile(data)
 					slog.Debug("Saved audio file", "file", file)
 					if err != nil {
-						c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+						writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
 						return nil, tempFiles, false
 					}
 					tempFiles = append(tempFiles, file)
@@ -254,7 +254,7 @@ func buildVLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					})
 				default:
 					slog.Error("Not support content part type", "type", *ct.GetType())
-					c.JSON(http.StatusBadRequest, map[string]any{"error": "not support content part type"})
+					writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "not support content part type"})
 					return nil, tempFiles, false
 				}
 			}
@@ -274,7 +274,7 @@ func buildVLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 					})
 				default:
 					slog.Error("Not support content part type", "type", *ct.GetType())
-					c.JSON(http.StatusBadRequest, map[string]any{"error": "not support content part type"})
+					writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "not support content part type"})
 					return nil, tempFiles, false
 				}
 			}
@@ -286,7 +286,7 @@ func buildVLMMessages(c *gin.Context, param ChatCompletionRequest) (messages []g
 
 		default:
 			slog.Error("Unknown content type in message")
-			c.JSON(http.StatusBadRequest, map[string]any{"error": "unknown content type"})
+			writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "unknown content type"})
 			return nil, tempFiles, false
 		}
 	}

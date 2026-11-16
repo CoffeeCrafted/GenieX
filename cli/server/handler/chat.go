@@ -90,18 +90,42 @@ func ChatCompletions(c *gin.Context) {
 	param := defaultChatCompletionRequest()
 	if err := c.ShouldBindJSON(&param); err != nil {
 		slog.Error("Failed to bind JSON", "error", err)
-		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	// max_tokens is the deprecated alias; below reads MaxCompletionTokens only.
 	param.MaxCompletionTokens = openai.Int(param.MaxCompletionTokens.Or(param.MaxTokens.Value))
 
 	slog.Info("ChatCompletions", "param", param)
+	dispatchChat(c, param, chatCompletionRunner{})
+}
+
+// chatRunner is what a handler does once its request is a ChatCompletionRequest
+// resolved to a model: chat writes Chat Completions output, Responses writes
+// Open Responses output from the same messages, model and prompt.
+type chatRunner interface {
+	llm(c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages []geniex_sdk.LlmChatMessage, session utils.SessionKey)
+	vlm(c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages []geniex_sdk.VlmChatMessage, session utils.SessionKey)
+}
+
+type chatCompletionRunner struct{}
+
+func (chatCompletionRunner) llm(c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages []geniex_sdk.LlmChatMessage, session utils.SessionKey) {
+	runChat(c, param, modelParam, messages, session, prepareLLM)
+}
+
+func (chatCompletionRunner) vlm(c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages []geniex_sdk.VlmChatMessage, session utils.SessionKey) {
+	runChat(c, param, modelParam, messages, session, prepareVLM)
+}
+
+// dispatchChat resolves the model, its load parameters and its type, builds
+// the SDK messages, and hands them to run. On failure it writes the error.
+func dispatchChat(c *gin.Context, param ChatCompletionRequest, run chatRunner) {
 	// Keep the precision: KeepAliveGet resolves this same string.
 	paths, err := geniex_sdk.ModelGetPaths(param.Model)
 	if err != nil {
 		slog.Error("Failed to resolve model paths", "model", param.Model, "error", err)
-		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -116,7 +140,7 @@ func ChatCompletions(c *gin.Context) {
 	})
 	if err != nil {
 		slog.Error("Failed to resolve model params", "model", param.Model, "error", err)
-		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	// Automatically adjust NCtx if MaxCompletionTokens is larger (llama_cpp only — QAIRT
@@ -139,7 +163,7 @@ func ChatCompletions(c *gin.Context) {
 		if !ok {
 			return
 		}
-		runChat(c, param, modelParam, messages, utils.SessionKeyOf(messages), prepareLLM)
+		run.llm(c, param, modelParam, messages, utils.SessionKeyOf(messages))
 	case geniex_sdk.ModelTypeVLM:
 		// Hash before buildVLMMessages swaps each image/audio part for a
 		// per-request temp file path; see SessionKeyOfVLMRequest.
@@ -151,10 +175,10 @@ func ChatCompletions(c *gin.Context) {
 		if !ok {
 			return
 		}
-		runChat(c, param, modelParam, messages, session, prepareVLM)
+		run.vlm(c, param, modelParam, messages, session)
 	default:
 		slog.Error("Model type not support", "model_type", paths.ModelType)
-		c.JSON(http.StatusBadRequest, map[string]any{"error": "model type not support"})
+		writeAPIError(c, http.StatusBadRequest, map[string]any{"error": "model type not support"})
 		return
 	}
 }
@@ -197,7 +221,7 @@ func writeChatExecutionError(c *gin.Context, err error) {
 		errors.Is(err, geniex_sdk.ErrVlmAudioLoad) {
 		status = http.StatusBadRequest
 	}
-	c.JSON(status, map[string]any{"error": err.Error(), "code": geniex_sdk.SDKErrorCode(err)})
+	writeAPIError(c, status, map[string]any{"error": err.Error(), "code": geniex_sdk.SDKErrorCode(err)})
 }
 
 func prepareLLM(p *geniex_sdk.LLM, input prepareInput[[]geniex_sdk.LlmChatMessage]) (string, generateFn, error) {
@@ -295,15 +319,34 @@ func generateWithRetry[T, M any](model *T, prompt string, gen generateFn, input 
 	return gen(prompt, onToken)
 }
 
-// runChat is the shared flow wrapping the type-specific prepareFn. session
-// identifies the conversation for the keepalive cache's reset decision.
-func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages M, session utils.SessionKey, prepare prepareFn[T, M]) {
-	// ---- prepare: parse tools, load the model, apply the chat template ----
+// chatJob is a chat request with its model loaded and its prompt templated,
+// ready to generate. Chat and Responses each write their own output from it.
+type chatJob[T, M any] struct {
+	model     *T
+	prompt    string
+	gen       generateFn
+	input     prepareInput[M]
+	prepare   prepareFn[T, M]
+	parseTool bool
+	tools     string
+}
+
+// generate runs the model, with the VLM prefix-reuse retry, feeding onToken.
+func (j *chatJob[T, M]) generate(onToken func(string) bool) (geniex_sdk.ProfileData, string, error) {
+	return generateWithRetry(j.model, j.prompt, j.gen, j.input, j.prepare, onToken)
+}
+
+// startChat parses tools, loads the model, and applies the chat template.
+// session identifies the conversation for the keepalive cache's reset
+// decision. On failure, or for a warm-up request (no messages, or a lone
+// system message: the model is loaded and nothing is generated), it writes
+// the response and returns ok=false.
+func startChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages M, session utils.SessionKey, prepare prepareFn[T, M]) (job *chatJob[T, M], ok bool) {
 	parseTool, tools, err := parseTools(param)
 	if err != nil {
 		slog.Error("Failed to parse tools", "error", err)
-		c.JSON(http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
+		writeAPIError(c, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return nil, false
 	}
 
 	acquired, err := service.KeepAliveGet[T](
@@ -312,7 +355,7 @@ func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam t
 		session,
 	)
 	if writeKeepAliveError(c, err) {
-		return
+		return nil, false
 	}
 	// Warm-up: no messages, or a lone system message — model loaded, nothing to generate.
 	var role *string
@@ -321,7 +364,7 @@ func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam t
 	}
 	if len(param.Messages) == 0 || role != nil && *role == "system" {
 		c.JSON(http.StatusOK, nil)
-		return
+		return nil, false
 	}
 
 	sampler := geniex_sdk.SamplerConfig{
@@ -335,62 +378,86 @@ func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam t
 		Seed:              int32(param.Seed.Value),
 		GrammarString:     param.GrammarString,
 	}
-	prompt, gen, err := prepare(acquired.Model, prepareInput[M]{
+	input := prepareInput[M]{
 		Messages: messages,
 		Param:    param,
 		Tools:    tools,
 		Sampler:  sampler,
 		Fresh:    acquired.Fresh,
-	})
+	}
+	prompt, gen, err := prepare(acquired.Model, input)
 	if err != nil {
 		writeChatExecutionError(c, err)
+		return nil, false
+	}
+	return &chatJob[T, M]{
+		model:     acquired.Model,
+		prompt:    prompt,
+		gen:       gen,
+		input:     input,
+		prepare:   prepare,
+		parseTool: parseTool,
+		tools:     tools,
+	}, true
+}
+
+// generateStreaming runs the job on its own goroutine and hands each token to
+// consume through a channel, as an SSE writer needs. consume returns once the
+// channel closes; wait then reports the generation error, and profile is set.
+func generateStreaming[T, M any](job *chatJob[T, M], consume func(tokens <-chan string, wait func() error, profile *geniex_sdk.ProfileData)) {
+	var stopGen atomic.Bool
+	dataCh := make(chan string)
+
+	var (
+		profile geniex_sdk.ProfileData
+		genErr  error
+		wg      sync.WaitGroup
+	)
+
+	wg.Go(func() {
+		profile, _, genErr = job.generate(func(token string) bool {
+			if stopGen.Load() {
+				return false
+			}
+			dataCh <- token
+			return true
+		})
+		close(dataCh)
+	})
+
+	consume(dataCh, func() error { wg.Wait(); return genErr }, &profile)
+
+	// A consumer that stopped early (client gone, error written) stops the
+	// model at its next token; drain so the generating goroutine can finish.
+	stopGen.Store(true)
+	for range dataCh {
+	}
+}
+
+// runChat is the Chat Completions flow: startChat, then SSE chunks or one
+// blocking response.
+func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam types.ModelParam, messages M, session utils.SessionKey, prepare prepareFn[T, M]) {
+	job, ok := startChat(c, param, modelParam, messages, session, prepare)
+	if !ok {
 		return
 	}
+	parseTool, tools := job.parseTool, job.tools
 
 	// ---- generate: stream SSE chunks or write one blocking response ----
 	if param.Stream {
 		// streaming
-		var stopGen atomic.Bool
-		dataCh := make(chan string)
-
-		var (
-			profile geniex_sdk.ProfileData
-			genErr  error
-			wg      sync.WaitGroup
-		)
-
-		wg.Go(func() {
-			profile, _, genErr = generateWithRetry(acquired.Model, prompt, gen, prepareInput[M]{
-				Messages: messages,
-				Param:    param,
-				Tools:    tools,
-				Sampler:  sampler,
-				Fresh:    acquired.Fresh,
-			}, prepare, func(token string) bool {
-				if stopGen.Load() {
-					return false
-				}
-				dataCh <- token
-				return true
-			})
-			close(dataCh)
+		generateStreaming(job, func(dataCh <-chan string, wait func() error, profile *geniex_sdk.ProfileData) {
+			includeUsage := param.StreamOptions.IncludeUsage.Value
+			class := tokenClass(plainClass)
+			if reasoningSeparated(param.ReasoningFormat) {
+				class = reasoningClass()
+			}
+			if parseTool {
+				streamToolCall(c, dataCh, wait, includeUsage, profile, class, tools, string(param.Model))
+			} else {
+				streamPlainText(c, dataCh, wait, includeUsage, profile, class, string(param.Model))
+			}
 		})
-
-		wait := func() error { wg.Wait(); return genErr }
-		includeUsage := param.StreamOptions.IncludeUsage.Value
-		class := tokenClass(plainClass)
-		if reasoningSeparated(param.ReasoningFormat) {
-			class = reasoningClass()
-		}
-		if parseTool {
-			streamToolCall(c, dataCh, wait, includeUsage, &profile, class, tools, string(param.Model))
-		} else {
-			streamPlainText(c, dataCh, wait, includeUsage, &profile, class, string(param.Model))
-		}
-
-		stopGen.Store(true)
-		for range dataCh {
-		}
 	} else {
 		// blocking
 		var content, reasoning strings.Builder
@@ -403,13 +470,7 @@ func runChat[T, M any](c *gin.Context, param ChatCompletionRequest, modelParam t
 		if parseTool {
 			onToken, finishToolCalls = sinkWithToolCalls(class, &content, &reasoning, tools)
 		}
-		profile, _, err := generateWithRetry(acquired.Model, prompt, gen, prepareInput[M]{
-			Messages: messages,
-			Param:    param,
-			Tools:    tools,
-			Sampler:  sampler,
-			Fresh:    acquired.Fresh,
-		}, prepare, onToken)
+		profile, _, err := job.generate(onToken)
 		// A prompt that never fit is a 400; a window exhausted mid-generation is a
 		// normal truncated completion (finish_reason=length), handled below.
 		if errors.Is(err, geniex_sdk.ErrLlmGenerationPromptTooLong) {

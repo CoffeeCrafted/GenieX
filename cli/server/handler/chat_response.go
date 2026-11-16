@@ -27,14 +27,14 @@ func writeKeepAliveError(c *gin.Context, err error) bool {
 	}
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		c.JSON(http.StatusNotFound, map[string]any{"error": "model not found"})
+		writeAPIError(c, http.StatusNotFound, map[string]any{"error": "model not found"})
 	case errors.Is(err, geniex_sdk.ErrCommonParamNotSupported):
-		c.JSON(http.StatusBadRequest, map[string]any{
+		writeAPIError(c, http.StatusBadRequest, map[string]any{
 			"error": "a parameter in the request is not supported by the runtime",
 			"code":  geniex_sdk.SDKErrorCode(err),
 		})
 	default:
-		c.JSON(http.StatusInternalServerError, map[string]any{
+		writeAPIError(c, http.StatusInternalServerError, map[string]any{
 			"error": err.Error(),
 			"code":  geniex_sdk.SDKErrorCode(err),
 		})
