@@ -46,6 +46,10 @@ func serve() *cobra.Command {
 	defaultFlags.String("model", "", "Model to use when request omits model: cached name[:precision] (env: GENIEX_MODEL)")
 	defaultFlags.Int32("nctx", 4096, "Context window size, llama_cpp only (env: GENIEX_NCTX)")
 	defaultFlags.Int32P("ngl", "n", -1, "Layers to offload to gpu/npu, -1 = all, llama_cpp only (env: GENIEX_NGL)")
+	// Server-wide, with no request field: the plugin sizes its compute buffer from n_ubatch, and a
+	// smaller one is how a model that overruns the NPU's mapping space on load is made to fit.
+	defaultFlags.Int32("nbatch", 0, "Logical batch size for every model loaded, 0 = plugin default (2048), llama_cpp only (env: GENIEX_NBATCH)")
+	defaultFlags.Int32("nubatch", 0, "Physical batch size for every model loaded, 0 = plugin default for the platform and compute unit, llama_cpp only (env: GENIEX_NUBATCH)")
 	defaultFlags.StringP("compute", "c", "", "Compute unit: cpu, gpu, npu, or hybrid (env: GENIEX_COMPUTE)")
 	defaultFlags.String("vit-compute", "", "VLM vision encoder compute unit, e.g. CPU or HTP2 (env: GENIEX_VIT_COMPUTE)")
 	defaultFlags.String("power-mode", "", "HTP power/clock-management mode: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst (burst when omitted) (env: GENIEX_POWER_MODE)")
@@ -69,6 +73,8 @@ func serve() *cobra.Command {
 	viper.BindPFlag("model", serveCmd.Flags().Lookup("model"))
 	viper.BindPFlag("nctx", serveCmd.Flags().Lookup("nctx"))
 	viper.BindPFlag("ngl", serveCmd.Flags().Lookup("ngl"))
+	viper.BindPFlag("nbatch", serveCmd.Flags().Lookup("nbatch"))
+	viper.BindPFlag("nubatch", serveCmd.Flags().Lookup("nubatch"))
 	viper.BindPFlag("compute", serveCmd.Flags().Lookup("compute"))
 	viper.BindPFlag("vitcompute", serveCmd.Flags().Lookup("vit-compute"))
 	viper.BindEnv("vitcompute", "GENIEX_VIT_COMPUTE")

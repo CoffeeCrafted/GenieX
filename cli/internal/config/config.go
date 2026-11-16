@@ -25,6 +25,8 @@ type Config struct {
 	Model       string  // Model used when a request omits model (default: "")
 	NCtx        int32   // Default context window size (default: 4096)
 	Ngl         int32   // Default GPU/NPU layers to offload, -1 = all (default: -1)
+	NBatch      int32   // Logical batch size for every model the server loads, llama_cpp only (0 = plugin default)
+	NUbatch     int32   // Physical batch size for every model the server loads, llama_cpp only (0 = plugin default)
 	Compute     string  // Default compute unit: cpu, gpu, npu, hybrid (default: "")
 	VitCompute  string  // Default VLM vision encoder compute unit (default: "")
 	PowerMode   string  // Default HTP power/clock-management mode (default: "" = burst)

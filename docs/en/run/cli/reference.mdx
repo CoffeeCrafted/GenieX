@@ -213,6 +213,8 @@ Thinking models put chain-of-thought in `message.reasoning_content` by default. 
 
 Chat requests think by default. Start the server with `--think=false` (or `GENIEX_THINK=false`) to turn thinking off for requests that omit `enable_think`; the request field always takes precedence.
 
+`--nbatch` and `--nubatch` (or `GENIEX_NBATCH` / `GENIEX_NUBATCH`) set the llama_cpp batch sizes for every model the server loads; `0` keeps the plugin default. There is no request field for them. A smaller `--nubatch` shrinks the compute buffer, which can let a model that overruns the NPU's mapping space load, at the cost of slower prompt processing. Liquid d1 decision models evaluate each `/v1/decisions` question in one physical batch, so with them a question longer than `--nubatch` tokens is rejected; other models split it like any prompt.
+
 ## **Logging**
 
 `--log` is a global flag controlling the CLI's log output. It is equivalent to the `GENIEX_LOG` environment variable and takes precedence over it when both are set.
@@ -259,6 +261,8 @@ Control model loading, context, and generation limits.
 |---|---|---|---|
 | `-n`, `--ngl` | int | `-1` | Number of layers to offload to GPU/NPU, `-1` = all (llama_cpp only). |
 | `--nctx` | int | `4096` | Context window size (max input + output tokens). |
+| `--nbatch` | int | `0` | Logical batch size; `0` = plugin default (`2048`) (llama_cpp only). |
+| `--nubatch` | int | `0` | Physical batch size; `0` = plugin default for the platform and compute unit (llama_cpp only). The compute buffer grows with it: lower it when an NPU load fails with `fastrpc_mmap failed`. |
 | `--max-tokens` | int | `2048` | Maximum tokens to generate per response. |
 | `--stop` | string[] | — | Stop sequences (can be specified multiple times). |
 | `--stop-file` | string | — | File containing stop sequences (one per line). |

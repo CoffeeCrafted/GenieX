@@ -33,6 +33,7 @@ var (
 	// disableStream *bool // reuse in run.go
 	ngl            int32
 	nctx           int32
+	nbatch         int32
 	ubatch         int32
 	maxTokens      int32
 	stop           []string
@@ -91,6 +92,9 @@ var (
 		modelLoadFlags.StringVarP(&computeUnit, "compute", "c", "", "compute unit to run on: cpu, gpu, npu, hybrid, or an explicit device list like HTP0,HTP1,HTP2,HTP3 (llama_cpp only) (default: npu)")
 		modelLoadFlags.Int32VarP(&ngl, "ngl", "n", -1, "number of layers to offload to gpu/npu, -1 = all (llama_cpp only)")
 		modelLoadFlags.Int32VarP(&nctx, "nctx", "", 4096, "context window size; raise to extend context (llama_cpp only)")
+		modelLoadFlags.Int32VarP(&nbatch, "nbatch", "", 0, "logical batch size, 0 = plugin default (2048) (llama_cpp only)")
+		// Bound to the existing ubatch: an explicit value wins over the chipset cap in ChipsetDefaults.
+		modelLoadFlags.Int32VarP(&ubatch, "nubatch", "", 0, "physical batch size, 0 = plugin default for the platform and compute unit; lower it when the NPU runs out of mapping space on load (llama_cpp only)")
 		modelLoadFlags.StringVarP(&powerMode, "power-mode", "", "", "HTP power/clock-management mode: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst (default: burst)")
 		return modelLoadFlags
 	}()
@@ -410,6 +414,7 @@ func inferLLM(ctx context.Context, paths *geniex_sdk.ModelPaths, resolvedPowerMo
 		DeviceID:  deviceID,
 		Config: geniex_sdk.ModelConfig{
 			NCtx:           nctxResolved,
+			NBatch:         nbatch,
 			NUbatch:        ubatch,
 			NGpuLayers:     nglResolved,
 			SpecType:       resolvedSpecType,
@@ -624,6 +629,7 @@ func inferVLM(paths *geniex_sdk.ModelPaths, resolvedPowerMode geniex_sdk.PowerMo
 		VitDeviceID: vitComputeUnit,
 		Config: geniex_sdk.ModelConfig{
 			NCtx:       nctxResolved,
+			NBatch:     nbatch,
 			NUbatch:    ubatch,
 			NGpuLayers: nglResolved,
 			PowerMode:  resolvedPowerMode,

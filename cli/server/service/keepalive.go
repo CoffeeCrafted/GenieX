@@ -79,9 +79,13 @@ func ResolveModelParam(runtimeID, modelName string, reqNCtx, reqNgl int32, reqCo
 		VitDeviceID: reqVitCompute,
 		PowerMode:   resolvedPowerMode,
 	}
-	// Spec is llama_cpp-only; leave it zero (disabled) for other plugins.
+	// Spec and the batch sizes are llama_cpp-only; leave them zero (disabled, plugin
+	// default) for other plugins. The batch sizes are server-wide (serve --nbatch /
+	// --nubatch) and carried here so a changed value reloads the cached model.
 	if runtimeID == geniex_sdk.RuntimeLlamaCpp {
 		mp.Spec = spec
+		cfg := config.Get()
+		mp.NBatch, mp.NUbatch = cfg.NBatch, cfg.NUbatch
 	}
 	return mp, nil
 }
@@ -241,6 +245,8 @@ func keepAliveGet[T any](name string, param types.ModelParam, session utils.Sess
 			Config: geniex_sdk.ModelConfig{
 				NCtx:           param.NCtx,
 				NGpuLayers:     param.NGpuLayers,
+				NBatch:         param.NBatch,
+				NUbatch:        param.NUbatch,
 				SpecType:       param.Spec.Type,
 				SpecDraftModel: draftPath,
 				SpecNMax:       param.Spec.NMax,
@@ -259,6 +265,8 @@ func keepAliveGet[T any](name string, param types.ModelParam, session utils.Sess
 			Config: geniex_sdk.ModelConfig{
 				NCtx:       param.NCtx,
 				NGpuLayers: param.NGpuLayers,
+				NBatch:     param.NBatch,
+				NUbatch:    param.NUbatch,
 				PowerMode:  param.PowerMode,
 			},
 			RuntimeID: paths.RuntimeID,
