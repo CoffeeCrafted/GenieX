@@ -219,16 +219,11 @@ func runCompaction[T, M any](c *gin.Context, param ChatCompletionRequest, modelP
 		}
 		return true
 	})
-	if errors.Is(err, geniex_sdk.ErrLlmGenerationPromptTooLong) {
-		writeResponsesError(c, http.StatusBadRequest, "the conversation is longer than the model's context window", "context_length_exceeded", "input")
-		return
-	}
-	if err != nil && !errors.Is(err, geniex_sdk.ErrLlmTokenizationContextLength) {
-		writeChatExecutionError(c, err)
+	if f, failed := generationFailed(err); failed {
+		writeResponsesError(c, f.status, f.message, f.code, f.param)
 		return
 	}
 	logProfile(profile)
-	usage := profile2Usage(profile)
 	c.JSON(http.StatusOK, compactResource{
 		ID:     newItemID("cmp"),
 		Object: "response.compaction",
@@ -239,11 +234,6 @@ func runCompaction[T, M any](c *gin.Context, param ChatCompletionRequest, modelP
 			CreatedBy:        "geniex",
 		}},
 		CreatedAt: time.Now().Unix(),
-		Usage: responsesUsage{
-			InputTokens:        usage.PromptTokens,
-			OutputTokens:       usage.CompletionTokens,
-			TotalTokens:        usage.TotalTokens,
-			InputTokensDetails: inputTokenDetails{CachedTokens: usage.PromptTokensDetails.CachedTokens},
-		},
+		Usage:     responsesUsageOf(profile, 0),
 	})
 }

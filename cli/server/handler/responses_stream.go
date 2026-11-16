@@ -5,7 +5,6 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -52,29 +51,20 @@ func (r *responsesRun) stream(c *gin.Context, parseTool bool, tools string, gene
 			feed.token(token)
 		}
 		err := wait()
-		if err != nil && !errors.Is(err, geniex_sdk.ErrLlmTokenizationContextLength) {
-			status, code, message := http.StatusInternalServerError, errorCode(err), err.Error()
-			if errors.Is(err, geniex_sdk.ErrLlmGenerationPromptTooLong) {
-				status, code, message = http.StatusBadRequest, "context_length_exceeded", "the input is longer than the model's context window"
-			}
+		if f, failed := generationFailed(err); failed {
 			slog.Error("Generation error", "error", err)
 			if r.t.websocket {
-				r.t.fail(status, message, code, nil)
+				r.t.fail(f.status, f.message, f.code, f.param)
 				return
 			}
-			write("error", map[string]any{"error": responsesErrorPayload(status, message, code, nil)})
+			write("error", map[string]any{"error": responsesErrorPayload(f.status, f.message, f.code, f.param)})
 			failed := r.resource("failed", out, nil)
-			failed.Error = &responseError{Code: code, Message: message}
+			failed.Error = &responseError{Code: f.code, Message: f.message}
 			write("response.failed", map[string]any{"response": failed})
 			return
 		}
-		logProfile(*profile)
-		feed.end()
-		status := r.finishStatus(*profile, err)
-		out.finish(itemStatus(status))
-		res := r.resource(status, out, profile)
-		r.store(out)
-		write("response."+status, map[string]any{"response": res})
+		res := r.finish(out, feed, *profile, err)
+		write("response."+res.Status, map[string]any{"response": res})
 	})
 }
 

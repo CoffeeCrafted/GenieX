@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -57,7 +56,7 @@ func ResponsesWebSocket(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), wsConnectionLimit)
 	defer cancel()
-	s := &wsSession{conn: conn, ctx: ctx, cancel: cancel, responses: map[string][]responsesItem{}}
+	s := newWSSession(conn, ctx, cancel)
 	for {
 		kind, data, err := conn.Read(ctx)
 		if err != nil {
@@ -123,10 +122,12 @@ type wsSession struct {
 	conn   *websocket.Conn
 	ctx    context.Context
 	cancel context.CancelFunc
+	// recent holds the connection's own responses, stored or not.
+	recent *responseStore
+}
 
-	mu        sync.Mutex
-	order     []string // response ids, oldest first
-	responses map[string][]responsesItem
+func newWSSession(conn *websocket.Conn, ctx context.Context, cancel context.CancelFunc) *wsSession {
+	return &wsSession{conn: conn, ctx: ctx, cancel: cancel, recent: newResponseStore(wsRecentResponses)}
 }
 
 // turn runs one response.create message.
@@ -213,56 +214,26 @@ func (s *wsSession) send(msg map[string]any) {
 
 // remember keeps a finished response in connection-local state.
 func (s *wsSession) remember(id string, conversation []responsesItem) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.responses[id]; !ok {
-		s.order = append(s.order, id)
-	}
-	s.responses[id] = conversation
-	for len(s.order) > wsRecentResponses {
-		delete(s.responses, s.order[0])
-		s.order = s.order[1:]
-	}
+	s.recent.put(id, conversation)
 }
 
 func (s *wsSession) evict(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.responses[id]; !ok {
-		return
-	}
-	delete(s.responses, id)
-	for i, other := range s.order {
-		if other == id {
-			s.order = append(s.order[:i], s.order[i+1:]...)
-			break
-		}
-	}
+	s.recent.delete(id)
 }
 
 // get looks in the connection first, then in the server-wide store, which
 // holds only store:true responses.
 func (s *wsSession) get(id string) ([]responsesItem, bool) {
-	s.mu.Lock()
-	conversation, ok := s.responses[id]
-	s.mu.Unlock()
-	if ok {
-		return append([]responsesItem(nil), conversation...), true
+	if conversation, ok := s.recent.get(id); ok {
+		return conversation, true
 	}
 	return responsesStore.get(id)
 }
 
 func (s *wsSession) item(id string) (responsesItem, bool) {
-	s.mu.Lock()
-	for _, conversation := range s.responses {
-		for _, item := range conversation {
-			if item.ID == id {
-				s.mu.Unlock()
-				return item, true
-			}
-		}
+	if item, ok := s.recent.item(id); ok {
+		return item, true
 	}
-	s.mu.Unlock()
 	return responsesStore.item(id)
 }
 

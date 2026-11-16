@@ -112,21 +112,48 @@ func runResponses[T, M any](c *gin.Context, r *responsesRun, param ChatCompletio
 	out := newOutputBuilder(nil, r.plan.allowed, r.req.MaxToolCalls)
 	feed := r.feeder(out, job.parseTool, job.tools)
 	profile, _, err := job.generate(func(token string) bool { feed.token(token); return true })
-	if errors.Is(err, geniex_sdk.ErrLlmGenerationPromptTooLong) {
-		r.t.fail(http.StatusBadRequest, "the input is longer than the model's context window", "context_length_exceeded", "input")
+	if f, failed := generationFailed(err); failed {
+		r.t.fail(f.status, f.message, f.code, f.param)
 		return
 	}
-	if err != nil && !errors.Is(err, geniex_sdk.ErrLlmTokenizationContextLength) {
-		writeChatExecutionError(c, err)
-		return
-	}
+	c.JSON(http.StatusOK, r.finish(out, feed, profile, err))
+}
+
+// finish ends a generation that did not fail, the same way for every
+// transport: the parser's remaining output, the final status, the stored
+// conversation. It returns the final ResponseResource.
+func (r *responsesRun) finish(out *outputBuilder, feed tokenFeed, profile geniex_sdk.ProfileData, err error) responseResource {
 	logProfile(profile)
 	feed.end()
 	status := r.finishStatus(profile, err)
 	out.finish(itemStatus(status))
 	resource := r.resource(status, out, &profile)
 	r.store(out)
-	c.JSON(http.StatusOK, resource)
+	return resource
+}
+
+// generationFailure is the Open Responses error a failed generation answers
+// with.
+type generationFailure struct {
+	status  int
+	code    string
+	message string
+	param   any // "input" or nil
+}
+
+// generationFailed reports whether err fails the request, and with which
+// error; one rule for every transport and for compaction. Running out of
+// context window while generating is not a failure: the response is
+// incomplete (finishStatus).
+func generationFailed(err error) (generationFailure, bool) {
+	switch {
+	case err == nil, errors.Is(err, geniex_sdk.ErrLlmTokenizationContextLength):
+		return generationFailure{}, false
+	case errors.Is(err, geniex_sdk.ErrLlmGenerationPromptTooLong):
+		return generationFailure{http.StatusBadRequest, "context_length_exceeded", "the input is longer than the model's context window", "input"}, true
+	default:
+		return generationFailure{chatExecutionStatus(err), errorCode(err), err.Error(), nil}, true
+	}
 }
 
 // tokenFeed classifies each token and passes it to the output builder,
@@ -245,24 +272,30 @@ func (r *responsesRun) resource(status string, out *outputBuilder, profile *geni
 	if profile != nil {
 		done := time.Now().Unix()
 		res.CompletedAt = &done
-		usage := profile2Usage(*profile)
-		// The SDK does not count thinking tokens; the builder counts the
-		// tokens the thinking classifier saw, capped at the output total.
-		var reasoningTokens int64
+		var reasoning int64
 		if out != nil {
-			reasoningTokens = min(out.reasoning, usage.CompletionTokens)
+			reasoning = out.reasoning
 		}
-		res.Usage = &responsesUsage{
-			InputTokens:         usage.PromptTokens,
-			OutputTokens:        usage.CompletionTokens,
-			TotalTokens:         usage.TotalTokens,
-			InputTokensDetails:  inputTokenDetails{CachedTokens: usage.PromptTokensDetails.CachedTokens},
-			OutputTokensDetails: outputTokenDetails{ReasoningTokens: reasoningTokens},
-		}
+		usage := responsesUsageOf(*profile, reasoning)
+		res.Usage = &usage
 		t := profile2Timings(*profile)
 		res.Timings = &t
 	}
 	return res
+}
+
+// responsesUsageOf is the spec's usage object for a finished generation. The
+// SDK does not count thinking tokens; reasoning is what the output builder's
+// thinking classifier saw, capped at the output total.
+func responsesUsageOf(profile geniex_sdk.ProfileData, reasoning int64) responsesUsage {
+	usage := profile2Usage(profile)
+	return responsesUsage{
+		InputTokens:         usage.PromptTokens,
+		OutputTokens:        usage.CompletionTokens,
+		TotalTokens:         usage.TotalTokens,
+		InputTokensDetails:  inputTokenDetails{CachedTokens: usage.PromptTokensDetails.CachedTokens},
+		OutputTokensDetails: outputTokenDetails{ReasoningTokens: min(reasoning, usage.CompletionTokens)},
+	}
 }
 
 func orDefault(p *float64, fallback float64) float64 {

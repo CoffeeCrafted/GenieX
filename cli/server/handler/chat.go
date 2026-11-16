@@ -215,13 +215,18 @@ func chatGenerationConfig(req ChatCompletionRequest, sampler *geniex_sdk.Sampler
 type prepareFn[T, M any] func(p *T, input prepareInput[M]) (prompt string, gen generateFn, err error)
 
 func writeChatExecutionError(c *gin.Context, err error) {
-	status := http.StatusInternalServerError
+	writeAPIError(c, chatExecutionStatus(err), map[string]any{"error": err.Error(), "code": geniex_sdk.SDKErrorCode(err)})
+}
+
+// chatExecutionStatus is the HTTP status of a failed generation: 400 when the
+// request's own input was bad, 500 otherwise.
+func chatExecutionStatus(err error) int {
 	if errors.Is(err, geniex_sdk.ErrCommonInvalidInput) ||
 		errors.Is(err, geniex_sdk.ErrVlmImageLoad) ||
 		errors.Is(err, geniex_sdk.ErrVlmAudioLoad) {
-		status = http.StatusBadRequest
+		return http.StatusBadRequest
 	}
-	writeAPIError(c, status, map[string]any{"error": err.Error(), "code": geniex_sdk.SDKErrorCode(err)})
+	return http.StatusInternalServerError
 }
 
 func prepareLLM(p *geniex_sdk.LLM, input prepareInput[[]geniex_sdk.LlmChatMessage]) (string, generateFn, error) {

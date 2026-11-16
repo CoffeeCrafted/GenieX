@@ -254,3 +254,26 @@ func TestResponseStoreForgetsTheOldest(t *testing.T) {
 		t.Error("the newest response should be kept")
 	}
 }
+
+func TestResponseStoreDelete(t *testing.T) {
+	store := newResponseStore(4)
+	store.put("a", []responsesItem{{Type: "message", ID: "item_a"}})
+	store.put("b", []responsesItem{{Type: "message", ID: "item_a"}, {Type: "message", ID: "item_b"}})
+	store.delete("b")
+	if _, ok := store.get("b"); ok {
+		t.Error("a deleted response should be gone")
+	}
+	if _, ok := store.item("item_b"); ok {
+		t.Error("an item only the deleted response held should be gone")
+	}
+	if _, ok := store.item("item_a"); !ok {
+		t.Error("an item another response still holds must stay")
+	}
+	store.delete("missing") // no-op
+	for _, id := range []string{"c", "d", "e"} {
+		store.put(id, nil)
+	}
+	if _, ok := store.get("a"); !ok {
+		t.Error("a deleted response must not count toward the limit")
+	}
+}

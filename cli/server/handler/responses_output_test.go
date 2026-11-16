@@ -5,11 +5,14 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	geniex_sdk "github.com/qualcomm/GenieX/bindings/go"
 )
 
 type recorded struct {
@@ -136,6 +139,32 @@ func TestResponsesErrorBodyFollowsTheSpec(t *testing.T) {
 	for k, v := range want {
 		if body.Error[k] != v {
 			t.Errorf("error.%s = %v, want %v (body %s)", k, body.Error[k], v, w.Body.String())
+		}
+	}
+}
+
+// TestGenerationFailedIsOneRule pins the error every transport and compaction
+// answer with for the same generation error.
+func TestGenerationFailedIsOneRule(t *testing.T) {
+	for _, err := range []error{nil, geniex_sdk.ErrLlmTokenizationContextLength} {
+		if _, failed := generationFailed(err); failed {
+			t.Errorf("%v should end the response as incomplete, not fail it", err)
+		}
+	}
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+		param  any
+	}{
+		{geniex_sdk.ErrLlmGenerationPromptTooLong, http.StatusBadRequest, "context_length_exceeded", "input"},
+		{fmt.Errorf("wrapped: %w", geniex_sdk.ErrCommonInvalidInput), http.StatusBadRequest, errorCode(geniex_sdk.ErrCommonInvalidInput), nil},
+		{geniex_sdk.ErrVlmImageLoad, http.StatusBadRequest, errorCode(geniex_sdk.ErrVlmImageLoad), nil},
+		{fmt.Errorf("model crashed"), http.StatusInternalServerError, errorCode(fmt.Errorf("model crashed")), nil},
+	} {
+		f, failed := generationFailed(tc.err)
+		if !failed || f.status != tc.status || f.code != tc.code || f.param != tc.param || f.message == "" {
+			t.Errorf("generationFailed(%v) = %+v, %v; want status %d code %q param %v", tc.err, f, failed, tc.status, tc.code, tc.param)
 		}
 	}
 }

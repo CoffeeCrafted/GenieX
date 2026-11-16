@@ -44,7 +44,7 @@ func wsTestSession(t *testing.T) (*wsSession, *websocket.Conn, *gin.Context) {
 		srv.Close()
 		cancel()
 	})
-	s := &wsSession{conn: <-serverConn, ctx: ctx, cancel: cancel, responses: map[string][]responsesItem{}}
+	s := newWSSession(<-serverConn, ctx, cancel)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	return s, client, c
@@ -135,7 +135,7 @@ func TestWebSocketFailedContinuationEvictsTheResponse(t *testing.T) {
 }
 
 func TestWebSocketSessionKeepsRecentResponses(t *testing.T) {
-	s := &wsSession{responses: map[string][]responsesItem{}}
+	s := newWSSession(nil, context.Background(), func() {})
 	for i := 0; i <= wsRecentResponses; i++ {
 		s.remember(fmt.Sprintf("resp_%d", i), []responsesItem{{Type: "message", ID: fmt.Sprintf("msg_%d", i)}})
 	}

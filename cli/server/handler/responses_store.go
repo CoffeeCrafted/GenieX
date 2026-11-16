@@ -49,15 +49,34 @@ func (s *responseStore) put(id string, conversation []responsesItem) {
 		}
 	}
 	for len(s.order) > s.max {
-		oldest := s.order[0]
-		s.order = s.order[1:]
-		delete(s.responses, oldest)
-		for _, itemID := range s.itemsOf[oldest] {
-			if !s.referencedElsewhere(itemID, oldest) {
-				delete(s.items, itemID)
-			}
+		s.drop(s.order[0])
+	}
+}
+
+// delete forgets response id and the items no other response holds.
+func (s *responseStore) delete(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.drop(id)
+}
+
+// drop is delete with s.mu held.
+func (s *responseStore) drop(id string) {
+	if _, ok := s.responses[id]; !ok {
+		return
+	}
+	delete(s.responses, id)
+	for _, itemID := range s.itemsOf[id] {
+		if !s.referencedElsewhere(itemID, id) {
+			delete(s.items, itemID)
 		}
-		delete(s.itemsOf, oldest)
+	}
+	delete(s.itemsOf, id)
+	for i, other := range s.order {
+		if other == id {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			break
+		}
 	}
 }
 
